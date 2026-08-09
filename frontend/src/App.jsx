@@ -1,19 +1,20 @@
-import { useEffect, useState } from "react";
-import { checkHealth } from "./api/client";
+import { useState } from "react";
+import UploadZone from "./components/UploadZone";
 
 function App() {
-  const [backendStatus, setBackendStatus] = useState("Vérification...");
-
-  useEffect(() => {
-    checkHealth()
-      .then((data) => setBackendStatus(`✅ Backend connecté : ${data.status}`))
-      .catch(() => setBackendStatus("❌ Impossible de contacter le backend"));
-  }, []);
+  const [documentId, setDocumentId] = useState(null);
 
   return (
     <div style={{ maxWidth: "600px", margin: "40px auto", fontFamily: "sans-serif" }}>
       <h1>Financial AI Agent</h1>
-      <p>{backendStatus}</p>
+
+      <UploadZone onDocumentReady={(id) => setDocumentId(id)} />
+
+      {documentId && (
+        <p style={{ marginTop: "16px" }}>
+          Document prêt à être traité : <code>{documentId}</code>
+        </p>
+      )}
     </div>
   );
 }
