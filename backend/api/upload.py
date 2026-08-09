@@ -3,7 +3,7 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request
 from werkzeug.utils import secure_filename
-
+from document_processing.pdf_parser import extract_text_by_page, get_document_stats
 upload_bp = Blueprint("upload", __name__)
 
 # Stockage temporaire en mémoire du statut de chaque document.
@@ -56,3 +56,18 @@ def get_status(document_id):
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
     return jsonify({"document_id": doc["document_id"], "status": doc["status"]})
+
+@upload_bp.route("/extract/<document_id>", methods=["GET"])
+def extract_text(document_id):
+    doc = DOCUMENTS_STATUS.get(document_id)
+    if not doc:
+        return jsonify({"error": "document_id inconnu"}), 404
+
+    stats = get_document_stats(doc["path"])
+    pages = extract_text_by_page(doc["path"])
+
+    return jsonify({
+        "document_id": document_id,
+        "stats": stats,
+        "preview": pages[:1],  # on renvoie juste la première page pour l'instant, pas tout
+    })
