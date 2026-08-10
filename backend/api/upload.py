@@ -8,7 +8,7 @@ from rag.vector_store import index_chunks, search
 from document_processing.pdf_parser import extract_text_by_page, get_document_stats
 from document_processing.table_extractor import extract_tables
 from document_processing.image_processor import extract_and_describe_images, describe_page_visually
-
+from agent.reasoning import answer_question
 upload_bp = Blueprint("upload", __name__)
 
 # Stockage temporaire en mémoire du statut de chaque document.
@@ -174,3 +174,22 @@ def search_route():
     results = search(query, filters=filters)
 
     return jsonify(results)   
+@upload_bp.route("/chat", methods=["POST"])
+def chat_route():
+    body = request.get_json()
+    question = body.get("question")
+    document_id = body.get("document_id")
+
+    if not question or not document_id:
+        return jsonify({"error": "champs 'question' et 'document_id' requis"}), 400
+
+    filters = {"document_id": document_id}
+    search_results = search(question, filters=filters)
+
+    answer = answer_question(question, search_results)
+
+    return jsonify({
+        "document_id": document_id,
+        "question": question,
+        "answer": answer,
+    })
