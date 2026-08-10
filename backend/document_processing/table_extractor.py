@@ -1,3 +1,6 @@
+import os
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
+
 from docling.document_converter import DocumentConverter
 
 

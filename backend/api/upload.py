@@ -1,9 +1,13 @@
 import uuid
 from pathlib import Path
-from document_processing.table_extractor import extract_tables
+
 from flask import Blueprint, current_app, jsonify, request
 from werkzeug.utils import secure_filename
+
 from document_processing.pdf_parser import extract_text_by_page, get_document_stats
+from document_processing.table_extractor import extract_tables
+from document_processing.image_processor import extract_and_describe_images, describe_page_visually
+
 upload_bp = Blueprint("upload", __name__)
 
 # Stockage temporaire en mémoire du statut de chaque document.
@@ -57,6 +61,7 @@ def get_status(document_id):
         return jsonify({"error": "document_id inconnu"}), 404
     return jsonify({"document_id": doc["document_id"], "status": doc["status"]})
 
+
 @upload_bp.route("/extract/<document_id>", methods=["GET"])
 def extract_text(document_id):
     doc = DOCUMENTS_STATUS.get(document_id)
@@ -69,12 +74,13 @@ def extract_text(document_id):
     return jsonify({
         "document_id": document_id,
         "stats": stats,
-        "preview": pages[:1],  # on renvoie juste la première page pour l'instant, pas tout
+        "preview": pages[:1],
     })
-    
+
+
 @upload_bp.route("/extract-tables/<document_id>", methods=["GET"])
 def extract_tables_route(document_id):
-    doc = get_document(document_id)
+    doc = DOCUMENTS_STATUS.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
@@ -84,4 +90,34 @@ def extract_tables_route(document_id):
         "document_id": document_id,
         "num_tables": len(tables),
         "tables": tables,
+    })
+
+
+@upload_bp.route("/extract-images/<document_id>", methods=["GET"])
+def extract_images_route(document_id):
+    doc = DOCUMENTS_STATUS.get(document_id)
+    if not doc:
+        return jsonify({"error": "document_id inconnu"}), 404
+
+    results = extract_and_describe_images(doc["path"])
+
+    return jsonify({
+        "document_id": document_id,
+        "num_images": len(results),
+        "images": results,
+    })
+
+
+@upload_bp.route("/describe-page/<document_id>/<int:page_number>", methods=["GET"])
+def describe_page_route(document_id, page_number):
+    doc = DOCUMENTS_STATUS.get(document_id)
+    if not doc:
+        return jsonify({"error": "document_id inconnu"}), 404
+
+    description = describe_page_visually(doc["path"], page_number)
+
+    return jsonify({
+        "document_id": document_id,
+        "page": page_number,
+        "description": description,
     })
