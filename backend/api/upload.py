@@ -9,6 +9,12 @@ from document_processing.pdf_parser import extract_text_by_page, get_document_st
 from document_processing.table_extractor import extract_tables
 from document_processing.image_processor import extract_and_describe_images, describe_page_visually
 from agent.reasoning import answer_question
+from code_generation.generator import generate_chart_code
+from code_generation.executor import run_chart_code
+from agent.reasoning import build_context_from_chunks
+import base64
+from flask import Flask, request, jsonify, send_file
+from flask import Blueprint, current_app, jsonify, request, send_file
 upload_bp = Blueprint("upload", __name__)
 
 # Stockage temporaire en mémoire du statut de chaque document.
@@ -193,3 +199,62 @@ def chat_route():
         "question": question,
         "answer": answer,
     })
+
+@upload_bp.route("/chart", methods=["POST"])
+def chart_route():
+    body = request.get_json()
+    question = body.get("question")
+    document_id = body.get("document_id")
+
+    if not question or not document_id:
+        return jsonify({"error": "champs 'question' et 'document_id' requis"}), 400
+
+    filters = {"document_id": document_id}
+    search_results = search(question, filters=filters, n_results=5)
+    context = build_context_from_chunks(search_results)
+    
+    print("=== CONTEXTE ===")
+    print(context)
+    print("================")
+
+    code = generate_chart_code(question, context)
+
+    print("=== CODE GÉNÉRÉ ===")
+    print(code)
+    print("===================")
+
+    code = generate_chart_code(question, context)
+    result = run_chart_code(code)
+
+    if not result["success"]:
+        return jsonify({"error": result["error"], "generated_code": code}), 500
+
+    # Sauvegarde du PNG sur disque au lieu de l'encoder en base64
+    results_folder = Path(current_app.config["RESULTS_FOLDER"])
+    results_folder.mkdir(parents=True, exist_ok=True)
+
+    chart_path = results_folder / f"{document_id}_chart.png"
+    with open(chart_path, "wb") as f:
+        f.write(result["chart_bytes"])
+
+    return jsonify({
+        "document_id": document_id,
+        "question": question,
+        "chart_url": f"/api/upload/chart-image/{document_id}",
+        "attempts": result["attempts"],
+    })
+
+
+@upload_bp.route("/chart-image/<document_id>", methods=["GET"])
+def get_chart_image(document_id):
+    """
+    Sert directement le fichier PNG généré, consultable dans un navigateur
+    ou dans Postman (onglet 'Send and Download' ou aperçu image automatique).
+    """
+    results_folder = Path(current_app.config["RESULTS_FOLDER"])
+    chart_path = results_folder / f"{document_id}_chart.png"
+
+    if not chart_path.exists():
+        return jsonify({"error": "Aucun graphique généré pour ce document_id"}), 404
+
+    return send_file(chart_path, mimetype="image/png")
