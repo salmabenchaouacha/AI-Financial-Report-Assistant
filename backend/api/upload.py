@@ -1,25 +1,40 @@
+import json
 import uuid
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from rag.chunking import chunk_text_pages, chunk_tables, chunk_images
 from rag.vector_store import index_chunks, search
 from document_processing.pdf_parser import extract_text_by_page, get_document_stats
 from document_processing.table_extractor import extract_tables
 from document_processing.image_processor import extract_and_describe_images, describe_page_visually
-from agent.reasoning import answer_question
+from agent.reasoning import answer_question, build_context_from_chunks
 from code_generation.generator import generate_chart_code
 from code_generation.executor import run_chart_code
-from agent.reasoning import build_context_from_chunks
-import base64
-from flask import Flask, request, jsonify, send_file
-from flask import Blueprint, current_app, jsonify, request, send_file
+
 upload_bp = Blueprint("upload", __name__)
 
-# Stockage temporaire en mémoire du statut de chaque document.
-# Sera remplacé plus tard par une vraie base de données.
-DOCUMENTS_STATUS = {}
+# Fichier où on sauvegarde l'état des documents, pour survivre aux redémarrages du serveur.
+STATUS_FILE = Path(__file__).parent.parent / "documents_status.json"
+
+
+def load_documents_status() -> dict:
+    """Recharge le statut des documents depuis le disque au démarrage du serveur."""
+    if STATUS_FILE.exists():
+        with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_documents_status():
+    """Sauvegarde l'état actuel de DOCUMENTS_STATUS sur le disque."""
+    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        json.dump(DOCUMENTS_STATUS, f, ensure_ascii=False, indent=2)
+
+
+# Stockage du statut de chaque document, rechargé depuis le disque au démarrage.
+DOCUMENTS_STATUS = load_documents_status()
 
 
 def allowed_file(filename: str) -> bool:
@@ -57,6 +72,7 @@ def upload_pdf():
         "status": "uploaded",
         "path": str(save_path),
     }
+    save_documents_status()
 
     return jsonify(DOCUMENTS_STATUS[document_id]), 201
 
@@ -128,6 +144,8 @@ def describe_page_route(document_id, page_number):
         "page": page_number,
         "description": description,
     })
+
+
 @upload_bp.route("/index/<document_id>", methods=["POST"])
 def index_document(document_id):
     """
@@ -150,6 +168,7 @@ def index_document(document_id):
     num_indexed = index_chunks(chunks)
 
     DOCUMENTS_STATUS[document_id]["status"] = "indexed"
+    save_documents_status()
 
     return jsonify({
         "document_id": document_id,
@@ -179,7 +198,9 @@ def search_route():
     filters = {"document_id": document_id} if document_id else None
     results = search(query, filters=filters)
 
-    return jsonify(results)   
+    return jsonify(results)
+
+
 @upload_bp.route("/chat", methods=["POST"])
 def chat_route():
     body = request.get_json()
@@ -200,6 +221,7 @@ def chat_route():
         "answer": answer,
     })
 
+
 @upload_bp.route("/chart", methods=["POST"])
 def chart_route():
     body = request.get_json()
@@ -212,7 +234,7 @@ def chart_route():
     filters = {"document_id": document_id}
     search_results = search(question, filters=filters, n_results=5)
     context = build_context_from_chunks(search_results)
-    
+
     print("=== CONTEXTE ===")
     print(context)
     print("================")
@@ -223,7 +245,6 @@ def chart_route():
     print(code)
     print("===================")
 
-    code = generate_chart_code(question, context)
     result = run_chart_code(code)
 
     if not result["success"]:

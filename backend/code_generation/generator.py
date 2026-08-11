@@ -29,7 +29,7 @@ QUESTION : {question}
 
 CODE PYTHON :"""
 
-    model = genai.GenerativeModel("gemini-3.5-flash-lite")   
+    model = genai.GenerativeModel("gemini-3.5-flash-lite")
     response = model.generate_content(prompt)
 
     code = response.text.strip()

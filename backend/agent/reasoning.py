@@ -39,6 +39,6 @@ QUESTION : {question}
 
 RÉPONSE :"""
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash-lite")
     response = model.generate_content(prompt)
     return response.text

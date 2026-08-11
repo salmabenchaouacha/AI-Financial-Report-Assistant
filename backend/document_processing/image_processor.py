@@ -40,7 +40,7 @@ def describe_image(image_bytes: bytes) -> str:
     """
     Envoie une image au modèle vision Gemini et retourne une description textuelle.
     """
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash-lite")
     image = Image.open(io.BytesIO(image_bytes))
 
     prompt = (

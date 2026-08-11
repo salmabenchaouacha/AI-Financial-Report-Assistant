@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { uploadPdf } from "../api/client";
+import { uploadPdf, indexDocument } from "../api/client";
 
 export default function UploadZone({ onDocumentReady }) {
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState(null); // null | "uploading" | "uploaded" | "error"
+  const [status, setStatus] = useState(null); // null | "uploading" | "indexing" | "ready" | "error"
   const [documentId, setDocumentId] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -16,19 +16,25 @@ export default function UploadZone({ onDocumentReady }) {
   const handleUpload = async () => {
     if (!file) return;
 
-    setStatus("uploading");
     setErrorMsg("");
 
     try {
+      // Étape 1 : Upload du fichier
+      setStatus("uploading");
       const data = await uploadPdf(file);
       setDocumentId(data.document_id);
-      setStatus(data.status);
 
+      // Étape 2 : Indexation (texte + tableaux + images) — peut prendre du temps
+      setStatus("indexing");
+      await indexDocument(data.document_id);
+
+      // Étape 3 : Le document est prêt, on peut chatter/générer des graphiques
+      setStatus("ready");
       if (onDocumentReady) onDocumentReady(data.document_id);
     } catch (err) {
       setStatus("error");
       setErrorMsg(
-        err.response?.data?.error || "Erreur lors de l'upload du fichier"
+        err.response?.data?.error || "Erreur lors de l'import ou de l'indexation du fichier"
       );
     }
   };
@@ -39,13 +45,21 @@ export default function UploadZone({ onDocumentReady }) {
 
       <input type="file" accept="application/pdf" onChange={handleFileChange} />
 
-      <button onClick={handleUpload} disabled={!file || status === "uploading"}>
-        {status === "uploading" ? "Envoi en cours..." : "Envoyer"}
+      <button onClick={handleUpload} disabled={!file || status === "uploading" || status === "indexing"}>
+        {status === "uploading" && "Envoi en cours..."}
+        {status === "indexing" && "Analyse du document en cours..."}
+        {(!status || status === "ready" || status === "error") && "Envoyer"}
       </button>
 
-      {status === "uploaded" && (
+      {status === "indexing" && (
+        <p style={{ color: "#888" }}>
+          ⏳ Extraction du texte, des tableaux et des images... cela peut prendre une minute.
+        </p>
+      )}
+
+      {status === "ready" && (
         <p style={{ color: "green" }}>
-          ✅ Fichier importé avec succès. document_id : <code>{documentId}</code>
+          ✅ Document prêt. document_id : <code>{documentId}</code>
         </p>
       )}
 

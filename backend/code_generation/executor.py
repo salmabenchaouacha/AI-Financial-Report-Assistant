@@ -45,7 +45,7 @@ ERREUR :
 
 CODE CORRIGÉ :"""
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash-lite")
     response = model.generate_content(prompt)
     fixed_code = response.text.strip().replace("```python", "").replace("```", "").strip()
     return fixed_code
