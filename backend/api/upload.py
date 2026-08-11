@@ -1,9 +1,10 @@
-import json
 import uuid
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request, send_file
 from werkzeug.utils import secure_filename
+
+from models import db, Document, ChatMessage
 from rag.chunking import chunk_text_pages, chunk_tables, chunk_images
 from rag.vector_store import index_chunks, search
 from document_processing.pdf_parser import extract_text_by_page, get_document_stats
@@ -14,27 +15,6 @@ from code_generation.generator import generate_chart_code
 from code_generation.executor import run_chart_code
 
 upload_bp = Blueprint("upload", __name__)
-
-# Fichier où on sauvegarde l'état des documents, pour survivre aux redémarrages du serveur.
-STATUS_FILE = Path(__file__).parent.parent / "documents_status.json"
-
-
-def load_documents_status() -> dict:
-    """Recharge le statut des documents depuis le disque au démarrage du serveur."""
-    if STATUS_FILE.exists():
-        with open(STATUS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_documents_status():
-    """Sauvegarde l'état actuel de DOCUMENTS_STATUS sur le disque."""
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
-        json.dump(DOCUMENTS_STATUS, f, ensure_ascii=False, indent=2)
-
-
-# Stockage du statut de chaque document, rechargé depuis le disque au démarrage.
-DOCUMENTS_STATUS = load_documents_status()
 
 
 def allowed_file(filename: str) -> bool:
@@ -66,33 +46,34 @@ def upload_pdf():
     save_path = upload_folder / f"{document_id}_{filename}"
     file.save(save_path)
 
-    DOCUMENTS_STATUS[document_id] = {
-        "document_id": document_id,
-        "filename": filename,
-        "status": "uploaded",
-        "path": str(save_path),
-    }
-    save_documents_status()
+    doc = Document(
+        id=document_id,
+        filename=filename,
+        status="uploaded",
+        path=str(save_path),
+    )
+    db.session.add(doc)
+    db.session.commit()
 
-    return jsonify(DOCUMENTS_STATUS[document_id]), 201
+    return jsonify(doc.to_dict()), 201
 
 
 @upload_bp.route("/status/<document_id>", methods=["GET"])
 def get_status(document_id):
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
-    return jsonify({"document_id": doc["document_id"], "status": doc["status"]})
+    return jsonify({"document_id": doc.id, "status": doc.status})
 
 
 @upload_bp.route("/extract/<document_id>", methods=["GET"])
 def extract_text(document_id):
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    stats = get_document_stats(doc["path"])
-    pages = extract_text_by_page(doc["path"])
+    stats = get_document_stats(doc.path)
+    pages = extract_text_by_page(doc.path)
 
     return jsonify({
         "document_id": document_id,
@@ -103,11 +84,11 @@ def extract_text(document_id):
 
 @upload_bp.route("/extract-tables/<document_id>", methods=["GET"])
 def extract_tables_route(document_id):
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    tables = extract_tables(doc["path"])
+    tables = extract_tables(doc.path)
 
     return jsonify({
         "document_id": document_id,
@@ -118,11 +99,11 @@ def extract_tables_route(document_id):
 
 @upload_bp.route("/extract-images/<document_id>", methods=["GET"])
 def extract_images_route(document_id):
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    results = extract_and_describe_images(doc["path"])
+    results = extract_and_describe_images(doc.path)
 
     return jsonify({
         "document_id": document_id,
@@ -133,11 +114,11 @@ def extract_images_route(document_id):
 
 @upload_bp.route("/describe-page/<document_id>/<int:page_number>", methods=["GET"])
 def describe_page_route(document_id, page_number):
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    description = describe_page_visually(doc["path"], page_number)
+    description = describe_page_visually(doc.path, page_number)
 
     return jsonify({
         "document_id": document_id,
@@ -152,13 +133,13 @@ def index_document(document_id):
     Pipeline complet : extrait texte + tableaux + images, chunk tout,
     et indexe dans ChromaDB. À lancer une fois par document.
     """
-    doc = DOCUMENTS_STATUS.get(document_id)
+    doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    pages = extract_text_by_page(doc["path"])
-    tables = extract_tables(doc["path"])
-    images = extract_and_describe_images(doc["path"])
+    pages = extract_text_by_page(doc.path)
+    tables = extract_tables(doc.path)
+    images = extract_and_describe_images(doc.path)
 
     chunks = []
     chunks += chunk_text_pages(pages, document_id)
@@ -167,8 +148,8 @@ def index_document(document_id):
 
     num_indexed = index_chunks(chunks)
 
-    DOCUMENTS_STATUS[document_id]["status"] = "indexed"
-    save_documents_status()
+    doc.status = "indexed"
+    db.session.commit()
 
     return jsonify({
         "document_id": document_id,
@@ -215,10 +196,36 @@ def chat_route():
 
     answer = answer_question(question, search_results)
 
+    # Enregistre la question/réponse dans l'historique
+    chat_entry = ChatMessage(
+        document_id=document_id,
+        question=question,
+        answer=answer,
+    )
+    db.session.add(chat_entry)
+    db.session.commit()
+
     return jsonify({
         "document_id": document_id,
         "question": question,
         "answer": answer,
+    })
+
+
+@upload_bp.route("/chat-history/<document_id>", methods=["GET"])
+def get_chat_history(document_id):
+    """
+    Nouveau : récupère l'historique des questions/réponses pour un document.
+    """
+    doc = Document.query.get(document_id)
+    if not doc:
+        return jsonify({"error": "document_id inconnu"}), 404
+
+    messages = ChatMessage.query.filter_by(document_id=document_id).order_by(ChatMessage.created_at).all()
+
+    return jsonify({
+        "document_id": document_id,
+        "history": [m.to_dict() for m in messages],
     })
 
 
@@ -250,7 +257,6 @@ def chart_route():
     if not result["success"]:
         return jsonify({"error": result["error"], "generated_code": code}), 500
 
-    # Sauvegarde du PNG sur disque au lieu de l'encoder en base64
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
     results_folder.mkdir(parents=True, exist_ok=True)
 
@@ -268,10 +274,6 @@ def chart_route():
 
 @upload_bp.route("/chart-image/<document_id>", methods=["GET"])
 def get_chart_image(document_id):
-    """
-    Sert directement le fichier PNG généré, consultable dans un navigateur
-    ou dans Postman (onglet 'Send and Download' ou aperçu image automatique).
-    """
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
     chart_path = results_folder / f"{document_id}_chart.png"
 

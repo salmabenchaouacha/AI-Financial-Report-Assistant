@@ -16,3 +16,7 @@ class Config:
     E2B_API_KEY = os.environ.get("E2B_API_KEY", "")
 
     CHROMA_PERSIST_DIR = BASE_DIR / "storage" / "chroma_db"
+
+    # Base de données PostgreSQL (documents + historique de chat)
+    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL", "")
+    SQLALCHEMY_TRACK_MODIFICATIONS = False  # désactive un warning inutile de Flask-SQLAlchemy
