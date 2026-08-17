@@ -13,6 +13,7 @@ from document_processing.image_processor import extract_and_describe_images, des
 from agent.reasoning import answer_question, build_context_from_chunks
 from code_generation.generator import generate_chart_code
 from code_generation.executor import run_chart_code
+from rag.vector_store import index_chunks, search, build_document_filter
 
 upload_bp = Blueprint("upload", __name__)
 
@@ -26,38 +27,50 @@ def allowed_file(filename: str) -> bool:
 
 @upload_bp.route("", methods=["POST"])
 def upload_pdf():
-    if "File" not in request.files:
+    if "file" not in request.files:
         return jsonify({"error": "Aucun fichier fourni (champ 'file' attendu)"}), 400
 
-    File = request.files["File"]
+    files = request.files.getlist("file")  # récupère TOUS les fichiers envoyés sous la clé "file"
 
-    if File.filename == "":
+    if not files or all(f.filename == "" for f in files):
         return jsonify({"error": "Nom de fichier vide"}), 400
 
-    if not allowed_file(File.filename):
-        return jsonify({"error": "Seuls les fichiers PDF sont acceptés"}), 400
+    uploaded_docs = []
+    errors = []
 
-    document_id = str(uuid.uuid4())
-    filename = secure_filename(File.filename)
+    for file in files:
+        if file.filename == "":
+            continue
 
-    upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
-    upload_folder.mkdir(parents=True, exist_ok=True)
+        if not allowed_file(file.filename):
+            errors.append(f"{file.filename} : seuls les fichiers PDF sont acceptés")
+            continue
 
-    save_path = upload_folder / f"{document_id}_{filename}"
-    File.save(save_path)
+        document_id = str(uuid.uuid4())
+        filename = secure_filename(file.filename)
 
-    doc = Document(
-        id=document_id,
-        filename=filename,
-        status="uploaded",
-        path=str(save_path),
-    )
-    db.session.add(doc)
+        upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
+        upload_folder.mkdir(parents=True, exist_ok=True)
+
+        save_path = upload_folder / f"{document_id}_{filename}"
+        file.save(save_path)
+
+        doc = Document(
+            id=document_id,
+            filename=filename,
+            status="uploaded",
+            path=str(save_path),
+        )
+        db.session.add(doc)
+        uploaded_docs.append(doc)
+
     db.session.commit()
 
-    return jsonify(doc.to_dict()), 201
-
-
+    return jsonify({
+        "uploaded": [doc.to_dict() for doc in uploaded_docs],
+        "errors": errors,
+    }), 201
+    
 @upload_bp.route("/status/<document_id>", methods=["GET"])
 def get_status(document_id):
     doc = Document.query.get(document_id)
@@ -145,9 +158,9 @@ def index_document(document_id):
     images = extract_and_describe_images(doc.path)
 
     chunks = []
-    chunks += chunk_text_pages(pages, document_id)
-    chunks += chunk_tables(tables, document_id)
-    chunks += chunk_images(images, document_id)
+    chunks += chunk_text_pages(pages, document_id, filename=doc.filename)
+    chunks += chunk_tables(tables, document_id, filename=doc.filename)
+    chunks += chunk_images(images, document_id, filename=doc.filename)
 
     num_indexed = index_chunks(chunks)
 
@@ -185,23 +198,28 @@ def search_route():
     return jsonify(results)
 
 
+
 @upload_bp.route("/chat", methods=["POST"])
 def chat_route():
     body = request.get_json()
     question = body.get("question")
-    document_id = body.get("document_id")
 
-    if not question or not document_id:
-        return jsonify({"error": "champs 'question' et 'document_id' requis"}), 400
+    # Accepte soit "document_id" (un seul doc, rétrocompatible), soit "document_ids" (liste)
+    document_ids = body.get("document_ids") or body.get("document_id")
 
-    filters = {"document_id": document_id}
-    search_results = search(question, filters=filters)
+    if not question or not document_ids:
+        return jsonify({"error": "champs 'question' et 'document_id(s)' requis"}), 400
+
+    filters = build_document_filter(document_ids)
+    search_results = search(question, filters=filters, n_results=8)  # un peu plus large pour couvrir plusieurs docs
 
     answer = answer_question(question, search_results)
 
-    # Enregistre la question/réponse dans l'historique
+    # Pour l'historique, on enregistre sous le premier document_id si plusieurs
+    primary_document_id = document_ids if isinstance(document_ids, str) else document_ids[0]
+
     chat_entry = ChatMessage(
-        document_id=document_id,
+        document_id=primary_document_id,
         question=question,
         answer=answer,
     )
@@ -209,11 +227,10 @@ def chat_route():
     db.session.commit()
 
     return jsonify({
-        "document_id": document_id,
+        "document_ids": document_ids if isinstance(document_ids, list) else [document_ids],
         "question": question,
         "answer": answer,
     })
-
 
 @upload_bp.route("/chat-history/<document_id>", methods=["GET"])
 def get_chat_history(document_id):

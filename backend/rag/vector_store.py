@@ -6,19 +6,12 @@ from config import Config
 _client = None
 _collection = None
 
-# Modèle d'embedding multilingue, adapté au français (contrairement au modèle
-# par défaut de ChromaDB qui est optimisé anglais). Tourne localement, aucun
-# appel API, donc pas de dépendance au quota Gemini pour la recherche.
 _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="paraphrase-multilingual-MiniLM-L12-v2"
 )
 
 
 def get_collection():
-    """
-    Singleton simple : on garde une seule connexion ChromaDB
-    et une seule collection ouverte pendant la vie du serveur.
-    """
     global _client, _collection
     if _collection is None:
         _client = chromadb.PersistentClient(path=str(Config.CHROMA_PERSIST_DIR))
@@ -30,10 +23,6 @@ def get_collection():
 
 
 def index_chunks(chunks: list[dict]):
-    """
-    Indexe une liste de chunks dans ChromaDB.
-    Chaque chunk doit avoir : id, text, metadata
-    """
     if not chunks:
         return 0
 
@@ -44,6 +33,25 @@ def index_chunks(chunks: list[dict]):
         metadatas=[c["metadata"] for c in chunks],
     )
     return len(chunks)
+
+
+def build_document_filter(document_ids) -> dict | None:
+    """
+    Construit le filtre ChromaDB à partir d'un ou plusieurs document_id.
+    Accepte une string (un seul doc) ou une liste (plusieurs docs).
+    """
+    if not document_ids:
+        return None
+
+    if isinstance(document_ids, str):
+        return {"document_id": document_ids}
+
+    if isinstance(document_ids, list):
+        if len(document_ids) == 1:
+            return {"document_id": document_ids[0]}
+        return {"document_id": {"$in": document_ids}}
+
+    return None
 
 
 def search(query: str, filters: dict = None, n_results: int = 5):
