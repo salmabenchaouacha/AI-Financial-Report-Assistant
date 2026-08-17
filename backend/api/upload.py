@@ -129,13 +129,16 @@ def describe_page_route(document_id, page_number):
 
 @upload_bp.route("/index/<document_id>", methods=["POST"])
 def index_document(document_id):
-    """
-    Pipeline complet : extrait texte + tableaux + images, chunk tout,
-    et indexe dans ChromaDB. À lancer une fois par document.
-    """
     doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
+
+    if doc.status == "indexed":
+        return jsonify({
+            "document_id": document_id,
+            "status": "already_indexed",
+            "message": "Ce document est déjà indexé. Réindexation ignorée.",
+        }), 200
 
     pages = extract_text_by_page(doc.path)
     tables = extract_tables(doc.path)

@@ -23,7 +23,7 @@ def get_collection():
     if _collection is None:
         _client = chromadb.PersistentClient(path=str(Config.CHROMA_PERSIST_DIR))
         _collection = _client.get_or_create_collection(
-            name="financial_reports_fr",  # nouveau nom, voir explication ci-dessous
+            name="financial_reports_fr",
             embedding_function=_embedding_function,
         )
     return _collection
