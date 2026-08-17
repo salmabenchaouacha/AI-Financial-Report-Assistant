@@ -26,25 +26,25 @@ def allowed_file(filename: str) -> bool:
 
 @upload_bp.route("", methods=["POST"])
 def upload_pdf():
-    if "file" not in request.files:
+    if "File" not in request.files:
         return jsonify({"error": "Aucun fichier fourni (champ 'file' attendu)"}), 400
 
-    file = request.files["file"]
+    File = request.files["File"]
 
-    if file.filename == "":
+    if File.filename == "":
         return jsonify({"error": "Nom de fichier vide"}), 400
 
-    if not allowed_file(file.filename):
+    if not allowed_file(File.filename):
         return jsonify({"error": "Seuls les fichiers PDF sont acceptés"}), 400
 
     document_id = str(uuid.uuid4())
-    filename = secure_filename(file.filename)
+    filename = secure_filename(File.filename)
 
     upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
     upload_folder.mkdir(parents=True, exist_ok=True)
 
     save_path = upload_folder / f"{document_id}_{filename}"
-    file.save(save_path)
+    File.save(save_path)
 
     doc = Document(
         id=document_id,
