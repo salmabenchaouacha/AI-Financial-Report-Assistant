@@ -7,37 +7,40 @@ export const checkHealth = async () => {
   return res.data;
 };
 
-export const uploadPdf = async (file) => {
+// Upload de plusieurs fichiers en un seul appel
+export const uploadPdfs = async (files) => {
   const formData = new FormData();
-  formData.append("file", file);
+  files.forEach((file) => formData.append("file", file));
 
   const res = await axios.post(`${API_BASE}/upload`, formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
 
-  return res.data; // { document_id, filename, status }
+  return res.data; // { uploaded: [...], errors: [...] }
 };
 
-export const getUploadStatus = async (documentId) => {
-  const res = await axios.get(`${API_BASE}/upload/status/${documentId}`);
-  return res.data; // { document_id, status }
-};
 export const indexDocument = async (documentId) => {
   const res = await axios.post(`${API_BASE}/upload/index/${documentId}`);
   return res.data;
 };
-export const askQuestion = async (documentId, question) => {
-  const res = await axios.post(`${API_BASE}/upload/chat`, {
-    document_id: documentId,
-    question,
-  });
-  return res.data; // { document_id, question, answer }
+
+export const listDocuments = async () => {
+  const res = await axios.get(`${API_BASE}/upload/documents`);
+  return res.data; // { documents: [...] }
 };
 
-export const generateChart = async (documentId, question) => {
-  const res = await axios.post(`${API_BASE}/upload/chart`, {
-    document_id: documentId,
+export const askQuestion = async (documentIds, question) => {
+  const res = await axios.post(`${API_BASE}/upload/chat`, {
+    document_ids: documentIds,
     question,
   });
-  return res.data; // { document_id, question, chart_url, attempts }
+  return res.data;
+};
+
+export const generateChart = async (documentIds, question) => {
+  const res = await axios.post(`${API_BASE}/upload/chart`, {
+    document_ids: documentIds,
+    question,
+  });
+  return res.data;
 };

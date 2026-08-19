@@ -61,3 +61,19 @@ def search(query: str, filters: dict = None, n_results: int = 5):
         n_results=n_results,
         where=filters,
     )
+def delete_document_chunks(document_id: str) -> int:
+    """
+    Supprime tous les chunks (texte, tableaux, images) associés à un
+    document_id donné. Retourne le nombre de chunks supprimés.
+    """
+    collection = get_collection()
+
+    # On récupère d'abord les ids concernés pour pouvoir logger/retourner un compte
+    existing = collection.get(where={"document_id": document_id})
+    ids_to_delete = existing.get("ids", [])
+
+    if not ids_to_delete:
+        return 0
+
+    collection.delete(ids=ids_to_delete)
+    return len(ids_to_delete)

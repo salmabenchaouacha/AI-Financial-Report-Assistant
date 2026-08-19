@@ -1,112 +1,92 @@
 import { useState } from "react";
 import { askQuestion, generateChart } from "../api/client";
+import LoadingMessage from "./LoadingMessage";
 
-const API_ORIGIN = "http://localhost:5000";
+const CHAT_MESSAGES = ["Consultation du dossier…", "Vérification des chiffres…", "Rédaction de la réponse…"];
+const CHART_MESSAGES = ["Esquisse du graphique…", "Calibrage des axes…", "Mise en couleur…"];
 
-export default function ChatWindow({ documentId }) {
-  const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState([]); // { question, answer, chartUrl, loading }
+export default function ChatWindow({ documentIds }) {
+  const [messages, setMessages] = useState([]); // { role: 'question'|'answer', text, chartUrl }
+  const [input, setInput] = useState("");
+  const [pending, setPending] = useState(null); // 'chat' | 'chart' | null
 
-  const handleAsk = async () => {
-    if (!question.trim()) return;
-
-    const currentQuestion = question;
-    setQuestion("");
-
-    const newMessage = { question: currentQuestion, answer: null, chartUrl: null, loading: true };
-    setMessages((prev) => [...prev, newMessage]);
+  const send = async (mode) => {
+    if (!input.trim() || documentIds.length === 0 || pending) return;
+    const question = input.trim();
+    setMessages((m) => [...m, { role: "question", text: question }]);
+    setInput("");
+    setPending(mode);
 
     try {
-      const data = await askQuestion(documentId, currentQuestion);
-      updateLastMessage({ answer: data.answer, loading: false });
+      if (mode === "chart") {
+        const data = await generateChart(documentIds, question);
+        setMessages((m) => [
+          ...m,
+          { role: "answer", text: "Voici le graphique demandé.", chartUrl: `http://localhost:5000${data.chart_url}` },
+        ]);
+      } else {
+        const data = await askQuestion(documentIds, question);
+        setMessages((m) => [...m, { role: "answer", text: data.answer }]);
+      }
     } catch (err) {
-      updateLastMessage({
-        answer: "❌ Erreur : " + (err.response?.data?.error || "impossible de répondre"),
-        loading: false,
-      });
+      setMessages((m) => [...m, { role: "answer", text: "Une erreur est survenue. Réessayez." }]);
+    } finally {
+      setPending(null);
     }
-  };
-
-  const handleGenerateChart = async (index, questionText) => {
-    updateMessageAt(index, { chartLoading: true });
-    try {
-      const data = await generateChart(documentId, questionText);
-      updateMessageAt(index, { chartUrl: API_ORIGIN + data.chart_url, chartLoading: false });
-    } catch (err) {
-      updateMessageAt(index, {
-        chartError: err.response?.data?.error || "Erreur génération graphique",
-        chartLoading: false,
-      });
-    }
-  };
-
-  const updateLastMessage = (updates) => {
-    setMessages((prev) => {
-      const copy = [...prev];
-      copy[copy.length - 1] = { ...copy[copy.length - 1], ...updates };
-      return copy;
-    });
-  };
-
-  const updateMessageAt = (index, updates) => {
-    setMessages((prev) => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], ...updates };
-      return copy;
-    });
   };
 
   return (
-    <div style={{ marginTop: "24px" }}>
-      <h3>Poser une question sur le rapport</h3>
-
-      <div style={{ display: "flex", gap: "8px" }}>
-        <input
-          type="text"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleAsk()}
-          placeholder="Ex: Quel est le total du bilan de CBI Burkina Faso ?"
-          style={{ flex: 1, padding: "8px" }}
-        />
-        <button onClick={handleAsk}>Envoyer</button>
+    <div className="main">
+      <div className="main-header">
+        <h2>Consultation du dossier</h2>
+        <span className="selection-hint">
+          {documentIds.length === 0
+            ? "Aucun document sélectionné"
+            : `${documentIds.length} document${documentIds.length > 1 ? "s" : ""} sélectionné${documentIds.length > 1 ? "s" : ""}`}
+        </span>
       </div>
 
-      <div style={{ marginTop: "16px" }}>
-        {messages.map((msg, index) => (
-          <div
-            key={index}
-            style={{ border: "1px solid #eee", borderRadius: "8px", padding: "12px", marginBottom: "12px" }}
-          >
-            <p><strong>Q :</strong> {msg.question}</p>
+      <div className="thread">
+        {messages.length === 0 && (
+          <div className="empty-state">
+            <div className="glyph">§</div>
+            <p>Sélectionnez un ou plusieurs dossiers, puis posez votre question.</p>
+          </div>
+        )}
 
-            {msg.loading ? (
-              <p>⏳ Réflexion en cours...</p>
-            ) : (
-              <>
-                <p><strong>R :</strong> {msg.answer}</p>
-
-                {!msg.chartUrl && !msg.chartLoading && (
-                  <button onClick={() => handleGenerateChart(index, msg.question)}>
-                    📊 Générer un graphique pour cette question
-                  </button>
-                )}
-
-                {msg.chartLoading && <p>⏳ Génération du graphique...</p>}
-
-                {msg.chartError && <p style={{ color: "red" }}>❌ {msg.chartError}</p>}
-
-                {msg.chartUrl && (
-                  <img
-                    src={msg.chartUrl}
-                    alt="Graphique généré"
-                    style={{ maxWidth: "100%", marginTop: "8px", border: "1px solid #ddd" }}
-                  />
-                )}
-              </>
+        {messages.map((m, i) => (
+          <div className={`slip ${m.role}`} key={i}>
+            {m.text}
+            {m.chartUrl && (
+              <div className="chart-frame">
+                <img src={m.chartUrl} alt="Graphique généré" />
+              </div>
             )}
+            {m.role === "answer" && !m.chartUrl && <div className="stamp">✓ Vérifié sur pièce</div>}
           </div>
         ))}
+
+        {pending && (
+          <div className="slip answer">
+            <LoadingMessage messages={pending === "chart" ? CHART_MESSAGES : CHAT_MESSAGES} />
+          </div>
+        )}
+      </div>
+
+      <div className="composer">
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send("chat")}
+          placeholder="Quel est le total du bilan de…"
+          disabled={documentIds.length === 0}
+        />
+        <button className="secondary" onClick={() => send("chart")} disabled={!input.trim() || pending}>
+          Graphique
+        </button>
+        <button className="primary" onClick={() => send("chat")} disabled={!input.trim() || pending}>
+          Envoyer
+        </button>
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ from agent.reasoning import answer_question, build_context_from_chunks
 from code_generation.generator import generate_chart_code
 from code_generation.executor import run_chart_code
 from rag.vector_store import index_chunks, search, build_document_filter
+from  rag.vector_store import delete_document_chunks  # adapte le chemin d'import
 
 upload_bp = Blueprint("upload", __name__)
 
@@ -251,16 +252,30 @@ def get_chat_history(document_id):
 
 @upload_bp.route("/chart", methods=["POST"])
 def chart_route():
-    body = request.get_json()
+    print("🔥 CHART ROUTE APPELÉE")
+
+    body = request.get_json(silent=True)
+
+    print("🔥 BODY REÇU :", body)
+
+    if not body:
+        return jsonify({"error": "JSON manquant ou invalide"}), 400
+
     question = body.get("question")
-    document_id = body.get("document_id")
+    document_ids = body.get("document_ids") or body.get("document_id")
 
-    if not question or not document_id:
-        return jsonify({"error": "champs 'question' et 'document_id' requis"}), 400
+    print("🔥 QUESTION :", question)
+    print("🔥 DOCUMENT IDS :", document_ids)
 
-    filters = {"document_id": document_id}
+    if not question or not document_ids:
+        return jsonify({
+            "error": "champs 'question' et 'document_id(s)' requis"
+        }), 400
+
+    filters = build_document_filter(document_ids)
     search_results = search(question, filters=filters, n_results=5)
     context = build_context_from_chunks(search_results)
+
 
     print("=== CONTEXTE ===")
     print(context)
@@ -280,14 +295,20 @@ def chart_route():
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
     results_folder.mkdir(parents=True, exist_ok=True)
 
-    chart_path = results_folder / f"{document_id}_chart.png"
+    primary_document_id = (
+        document_ids[0] if isinstance(document_ids, list)
+        else document_ids
+    )
+
+    chart_path = results_folder / f"{primary_document_id}_chart.png"
+
     with open(chart_path, "wb") as f:
         f.write(result["chart_bytes"])
 
     return jsonify({
-        "document_id": document_id,
+        "document_id": primary_document_id,
         "question": question,
-        "chart_url": f"/api/upload/chart-image/{document_id}",
+        "chart_url": f"/api/upload/chart-image/{primary_document_id}",
         "attempts": result["attempts"],
     })
 
@@ -301,3 +322,33 @@ def get_chart_image(document_id):
         return jsonify({"error": "Aucun graphique généré pour ce document_id"}), 404
 
     return send_file(chart_path, mimetype="image/png")
+@upload_bp.route("/documents", methods=["GET"])
+def list_documents():
+    docs = Document.query.order_by(Document.created_at.desc()).all()
+    return jsonify({"documents": [d.to_dict() for d in docs]})
+
+@upload_bp.route("/documents/<document_id>", methods=["DELETE"])
+def delete_document(document_id):
+    doc = Document.query.get(document_id)
+
+    if not doc:
+        return jsonify({"error": "Document introuvable"}), 404
+
+    # Supprimer le fichier PDF
+    if doc.path:
+        pdf_path = Path(doc.path)
+        if pdf_path.exists():
+            pdf_path.unlink()
+
+    # Supprimer les vecteurs associés dans ChromaDB
+    deleted_chunks = delete_document_chunks(document_id)
+
+    # Supprimer le document de PostgreSQL
+    db.session.delete(doc)
+    db.session.commit()
+
+    return jsonify({
+        "message": "Document supprimé avec succès",
+        "document_id": document_id,
+        "chunks_supprimes": deleted_chunks
+    }), 200
