@@ -15,10 +15,22 @@ from code_generation.generator import generate_chart_code
 from code_generation.executor import run_chart_code
 from rag.vector_store import index_chunks, search, build_document_filter
 from  rag.vector_store import delete_document_chunks  # adapte le chemin d'import
+from agent.reasoning import answer_question, build_context_from_chunks, build_sources_from_results
+from rag.vector_store import index_chunks, search, build_document_filter, search_with_table_priority
 
 upload_bp = Blueprint("upload", __name__)
 
+_ANALYTICAL_KEYWORDS = [
+    "compare", "comparaison", "évolution", "évolué", "tendance", "classement",
+    "qui a le plus", "qui a le moins", "la plus", "la moins", "part de", "pourcentage",
+    "proportion", "total", "somme", "ratio", "écart", "différence", "variation",
+    "pourquoi", "explique", "analyse", "contribué", "expliquer",
+]
 
+
+def is_analytical_question(question: str) -> bool:
+    q = question.lower()
+    return any(kw in q for kw in _ANALYTICAL_KEYWORDS)
 def allowed_file(filename: str) -> bool:
     return (
         "." in filename
@@ -200,23 +212,23 @@ def search_route():
 
 
 
+from rag.vector_store import index_chunks, search, build_document_filter, search_with_table_priority
+
 @upload_bp.route("/chat", methods=["POST"])
 def chat_route():
     body = request.get_json()
     question = body.get("question")
-
-    # Accepte soit "document_id" (un seul doc, rétrocompatible), soit "document_ids" (liste)
     document_ids = body.get("document_ids") or body.get("document_id")
 
     if not question or not document_ids:
         return jsonify({"error": "champs 'question' et 'document_id(s)' requis"}), 400
 
-    filters = build_document_filter(document_ids)
-    search_results = search(question, filters=filters, n_results=8)  # un peu plus large pour couvrir plusieurs docs
+    n_results = 12 if is_analytical_question(question) else 8
+    search_results = search_with_table_priority(question, document_ids, n_results=n_results, n_tables=5)
 
     answer = answer_question(question, search_results)
+    sources = build_sources_from_results(search_results)
 
-    # Pour l'historique, on enregistre sous le premier document_id si plusieurs
     primary_document_id = document_ids if isinstance(document_ids, str) else document_ids[0]
 
     chat_entry = ChatMessage(
@@ -231,7 +243,9 @@ def chat_route():
         "document_ids": document_ids if isinstance(document_ids, list) else [document_ids],
         "question": question,
         "answer": answer,
+        "sources": sources,
     })
+    
 
 @upload_bp.route("/chat-history/<document_id>", methods=["GET"])
 def get_chat_history(document_id):
@@ -250,42 +264,23 @@ def get_chat_history(document_id):
     })
 
 
+from code_generation.generator import generate_chart_code, classify_chart_intent
+
 @upload_bp.route("/chart", methods=["POST"])
 def chart_route():
-    print("🔥 CHART ROUTE APPELÉE")
-
-    body = request.get_json(silent=True)
-
-    print("🔥 BODY REÇU :", body)
-
-    if not body:
-        return jsonify({"error": "JSON manquant ou invalide"}), 400
-
+    body = request.get_json()
     question = body.get("question")
     document_ids = body.get("document_ids") or body.get("document_id")
 
-    print("🔥 QUESTION :", question)
-    print("🔥 DOCUMENT IDS :", document_ids)
-
     if not question or not document_ids:
-        return jsonify({
-            "error": "champs 'question' et 'document_id(s)' requis"
-        }), 400
+        return jsonify({"error": "champs 'question' et 'document_id(s)' requis"}), 400
 
     filters = build_document_filter(document_ids)
-    search_results = search(question, filters=filters, n_results=5)
+    search_results = search(question, filters=filters, n_results=8)
     context = build_context_from_chunks(search_results)
 
-
-    print("=== CONTEXTE ===")
-    print(context)
-    print("================")
-
-    code = generate_chart_code(question, context)
-
-    print("=== CODE GÉNÉRÉ ===")
-    print(code)
-    print("===================")
+    chart_intent = classify_chart_intent(question)
+    code = generate_chart_code(question, context, chart_intent=chart_intent)
 
     result = run_chart_code(code)
 
@@ -295,23 +290,19 @@ def chart_route():
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
     results_folder.mkdir(parents=True, exist_ok=True)
 
-    primary_document_id = (
-        document_ids[0] if isinstance(document_ids, list)
-        else document_ids
-    )
-
+    primary_document_id = document_ids if isinstance(document_ids, str) else document_ids[0]
     chart_path = results_folder / f"{primary_document_id}_chart.png"
-
     with open(chart_path, "wb") as f:
         f.write(result["chart_bytes"])
 
     return jsonify({
-        "document_id": primary_document_id,
+        "document_ids": document_ids if isinstance(document_ids, list) else [document_ids],
         "question": question,
+        "chart_type_detected": chart_intent,
         "chart_url": f"/api/upload/chart-image/{primary_document_id}",
         "attempts": result["attempts"],
     })
-
+ 
 
 @upload_bp.route("/chart-image/<document_id>", methods=["GET"])
 def get_chart_image(document_id):
@@ -321,7 +312,11 @@ def get_chart_image(document_id):
     if not chart_path.exists():
         return jsonify({"error": "Aucun graphique généré pour ce document_id"}), 404
 
-    return send_file(chart_path, mimetype="image/png")
+    response = send_file(chart_path, mimetype="image/png")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 @upload_bp.route("/documents", methods=["GET"])
 def list_documents():
     docs = Document.query.order_by(Document.created_at.desc()).all()
