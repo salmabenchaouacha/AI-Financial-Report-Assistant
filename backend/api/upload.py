@@ -17,7 +17,7 @@ from rag.vector_store import index_chunks, search, build_document_filter
 from  rag.vector_store import delete_document_chunks  # adapte le chemin d'import
 from agent.reasoning import answer_question, build_context_from_chunks, build_sources_from_results
 from rag.vector_store import index_chunks, search, build_document_filter, search_with_table_priority
-
+from services.cloud_storage import upload_pdf_to_cloud, local_copy_of
 upload_bp = Blueprint("upload", __name__)
 
 _ANALYTICAL_KEYWORDS = [
@@ -38,12 +38,15 @@ def allowed_file(filename: str) -> bool:
     )
 
 
+import os
+from services.cloud_storage import upload_pdf_to_cloud, local_copy_of
+
 @upload_bp.route("", methods=["POST"])
 def upload_pdf():
     if "file" not in request.files:
         return jsonify({"error": "Aucun fichier fourni (champ 'file' attendu)"}), 400
 
-    files = request.files.getlist("file")  # récupère TOUS les fichiers envoyés sous la clé "file"
+    files = request.files.getlist("file")
 
     if not files or all(f.filename == "" for f in files):
         return jsonify({"error": "Nom de fichier vide"}), 400
@@ -62,17 +65,20 @@ def upload_pdf():
         document_id = str(uuid.uuid4())
         filename = secure_filename(file.filename)
 
-        upload_folder = Path(current_app.config["UPLOAD_FOLDER"])
-        upload_folder.mkdir(parents=True, exist_ok=True)
+        # Sauvegarde temporaire locale, uniquement le temps de l'envoi vers Cloudinary
+        tmp_dir = Path(current_app.config["UPLOAD_FOLDER"])
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = tmp_dir / f"{document_id}.pdf"
+        file.save(tmp_path)
 
-        save_path = upload_folder / f"{document_id}_{filename}"
-        file.save(save_path)
+        cloud_url = upload_pdf_to_cloud(str(tmp_path), public_id=document_id)
+        os.remove(tmp_path)  # rien ne reste en local, seule l'URL est conservée
 
         doc = Document(
             id=document_id,
             filename=filename,
             status="uploaded",
-            path=str(save_path),
+            path=cloud_url,  # URL Cloudinary, plus un chemin disque
         )
         db.session.add(doc)
         uploaded_docs.append(doc)
@@ -83,6 +89,7 @@ def upload_pdf():
         "uploaded": [doc.to_dict() for doc in uploaded_docs],
         "errors": errors,
     }), 201
+
     
 @upload_bp.route("/status/<document_id>", methods=["GET"])
 def get_status(document_id):
@@ -98,8 +105,9 @@ def extract_text(document_id):
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    stats = get_document_stats(doc.path)
-    pages = extract_text_by_page(doc.path)
+    with local_copy_of(doc) as local_path:
+        stats = get_document_stats(local_path)
+        pages = extract_text_by_page(local_path)
 
     return jsonify({
         "document_id": document_id,
@@ -107,14 +115,14 @@ def extract_text(document_id):
         "preview": pages[:1],
     })
 
-
 @upload_bp.route("/extract-tables/<document_id>", methods=["GET"])
 def extract_tables_route(document_id):
     doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    tables = extract_tables(doc.path)
+    with local_copy_of(doc) as local_path:
+        tables = extract_tables(local_path)
 
     return jsonify({
         "document_id": document_id,
@@ -122,36 +130,34 @@ def extract_tables_route(document_id):
         "tables": tables,
     })
 
-
 @upload_bp.route("/extract-images/<document_id>", methods=["GET"])
 def extract_images_route(document_id):
     doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    results = extract_and_describe_images(doc.path)
+    with local_copy_of(doc) as local_path:
+        results = extract_and_describe_images(local_path)
 
     return jsonify({
         "document_id": document_id,
         "num_images": len(results),
         "images": results,
     })
-
-
 @upload_bp.route("/describe-page/<document_id>/<int:page_number>", methods=["GET"])
 def describe_page_route(document_id, page_number):
     doc = Document.query.get(document_id)
     if not doc:
         return jsonify({"error": "document_id inconnu"}), 404
 
-    description = describe_page_visually(doc.path, page_number)
+    with local_copy_of(doc) as local_path:
+        description = describe_page_visually(local_path, page_number)
 
     return jsonify({
         "document_id": document_id,
         "page": page_number,
         "description": description,
     })
-
 
 @upload_bp.route("/index/<document_id>", methods=["POST"])
 def index_document(document_id):
@@ -166,9 +172,10 @@ def index_document(document_id):
             "message": "Ce document est déjà indexé. Réindexation ignorée.",
         }), 200
 
-    pages = extract_text_by_page(doc.path)
-    tables = extract_tables(doc.path)
-    images = extract_and_describe_images(doc.path)
+    with local_copy_of(doc) as local_path:
+        pages = extract_text_by_page(local_path)
+        tables = extract_tables(local_path)
+        images = extract_and_describe_images(local_path)
 
     chunks = []
     chunks += chunk_text_pages(pages, document_id, filename=doc.filename)
