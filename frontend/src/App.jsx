@@ -1,84 +1,72 @@
 import { useEffect, useState } from "react";
-import { listDocuments } from "./api/client";
-import UploadZone from "./components/UploadZone";
-import DocumentList from "./components/DocumentList";
+import { listDocuments, listConversations } from "./api/client";
+import Sidebar from "./components/Sidebar";
+import UploadModal from "./components/UploadModal";
+import OverviewPage from "./pages/OverviewPage";
+import DocumentsPage from "./pages/DocumentsPage";
+import AnalysisPage from "./pages/AnalysisPage";
+import ReportsPage from "./pages/ReportsPage";
 import ChatWindow from "./components/ChatWindow";
 import "./theme.css";
 
 function App() {
+  const [page, setPage] = useState("overview");
   const [documents, setDocuments] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [showUpload, setShowUpload] = useState(false);
 
-  const refresh = async () => {
-    const data = await listDocuments();
-    setDocuments(data.documents);
-  };
+  const refreshDocuments = async () => setDocuments((await listDocuments()).documents);
+  const refreshConversations = async () => setConversations((await listConversations()).conversations);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refreshDocuments(); refreshConversations(); }, []);
 
-  const toggle = (id) => {
-    setSelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  };
-
-  const deleteDocument = async (documentId) => {
-    if (!window.confirm("Voulez-vous vraiment supprimer ce document ?")) {
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `http://localhost:5000/api/upload/documents/${documentId}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Erreur lors de la suppression");
-      }
-
-      // Supprimer le document de la liste affichée
-      setDocuments((prev) =>
-        prev.filter((doc) => doc.document_id !== documentId)
-      );
-
-      // S'il était sélectionné, le retirer aussi
-      setSelectedIds((prev) =>
-        prev.filter((id) => id !== documentId)
-      );
-
-    } catch (error) {
-      console.error("Erreur suppression :", error);
-      alert(error.message);
-    }
-  };
+  const toggle = (id) => setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">Analyse documentaire</span>
-          <h1>Sonde</h1>
-          <p>Déposez un document, envoyez un signal, obtenez une réponse précise.</p>
-        </div>
+    <div className="app-shell-v2">
+      <Sidebar activePage={page} onNavigate={setPage} />
 
-        <UploadZone onDocumentsIndexed={refresh} />
-        <DocumentList
+      {page === "overview" && (
+        <OverviewPage documents={documents} onNavigate={setPage} onUploadClick={() => setShowUpload(true)} />
+      )}
+
+      {page === "documents" && (
+        <DocumentsPage documents={documents} selectedIds={selectedIds} onToggle={toggle} onAnalyze={() => setPage("analysis")} />
+      )}
+
+      {page === "analysis" && (
+        <AnalysisPage
           documents={documents}
           selectedIds={selectedIds}
           onToggle={toggle}
-          onDelete={deleteDocument}
+          conversationId={activeConversationId}
+          onConversationChange={setActiveConversationId}
+          onConversationsUpdated={refreshConversations}
         />
-      </aside>
+      )}
 
-      <ChatWindow documentIds={selectedIds} />
+      {page === "chat" && (
+        <ChatWindow
+          documents={documents}
+          documentIds={selectedIds}
+          conversationId={activeConversationId}
+          onConversationChange={setActiveConversationId}
+          onConversationsUpdated={refreshConversations}
+        />
+      )}
+
+      {page === "reports" && <ReportsPage />}
+
+      {showUpload && (
+        <UploadModal
+          onClose={() => setShowUpload(false)}
+          onDone={() => { refreshDocuments(); }}
+        />
+      )}
     </div>
   );
 }
 
 export default App;
-

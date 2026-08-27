@@ -16,7 +16,7 @@ export const uploadPdfs = async (files) => {
     headers: { "Content-Type": "multipart/form-data" },
   });
 
-  return res.data; // { uploaded: [...], errors: [...] }
+  return res.data;
 };
 
 export const indexDocument = async (documentId) => {
@@ -26,21 +26,47 @@ export const indexDocument = async (documentId) => {
 
 export const listDocuments = async () => {
   const res = await axios.get(`${API_BASE}/upload/documents`);
-  return res.data; // { documents: [...] }
+  return res.data;
 };
 
-export const askQuestion = async (documentIds, question) => {
+export const listConversations = async () => {
+  const res = await axios.get(`${API_BASE}/upload/conversations`);
+  return res.data;
+};
+
+export const getConversation = async (conversationId) => {
+  const res = await axios.get(`${API_BASE}/upload/conversations/${conversationId}`);
+  return res.data;
+};
+
+export const deleteConversation = async (conversationId) => {
+  const res = await axios.delete(`${API_BASE}/upload/conversations/${conversationId}`);
+  return res.data;
+};
+
+export const askQuestion = async (documentIds, question, conversationId = null) => {
   const res = await axios.post(`${API_BASE}/upload/chat`, {
     document_ids: documentIds,
     question,
+    conversation_id: conversationId,
   });
   return res.data;
 };
 
-export const generateChart = async (documentIds, question) => {
+export const generateChart = async (documentIds, question, conversationId = null) => {
   const res = await axios.post(`${API_BASE}/upload/chart`, {
     document_ids: documentIds,
     question,
+    conversation_id: conversationId,
   });
+  return res.data;
+};
+
+export const getStats = async () => {
+  const res = await axios.get(`${API_BASE}/upload/stats`);
+  return res.data;
+};
+export const listReports = async () => {
+  const res = await axios.get(`${API_BASE}/upload/reports`);
   return res.data;
 };

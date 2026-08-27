@@ -1,7 +1,7 @@
 from flask import Flask
 from flask_cors import CORS
 from config import Config
-from models import db
+from models import db, Document, Conversation, ChatMessage
 from api.upload import upload_bp
 
 
@@ -9,14 +9,20 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    # Initialisation de la base de données PostgreSQL
     db.init_app(app)
+
     with app.app_context():
-        db.create_all()  # crée les tables 'documents' et 'chat_history' si elles n'existent pas encore
+        print("DATABASE :", db.engine.url)
+        print("TABLES :", db.metadata.tables.keys())
+
+        db.create_all()
 
     app.register_blueprint(upload_bp, url_prefix="/api/upload")
-    # Autorise le frontend React (port 5173, celui de Vite) à appeler l'API
-    CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}})
+
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": "http://localhost:5173"}}
+    )
 
     @app.route("/api/health")
     def health():

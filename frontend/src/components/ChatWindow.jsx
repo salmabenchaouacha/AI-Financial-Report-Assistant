@@ -1,28 +1,45 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { askQuestion, generateChart } from "../api/client";
+import { Send, BarChart3 } from "lucide-react";
+import { askQuestion, generateChart, getConversation } from "../api/client";
 import LoadingMessage from "./LoadingMessage";
-import SourcePanel from "./SourcePanel";
+import KeyFigures from "./KeyFigures";
+import SourceChips from "./SourceChips";
 
 const CHAT_MESSAGES = ["Consultation du dossier…", "Vérification des chiffres…", "Rédaction de la réponse…"];
 const CHART_MESSAGES = ["Esquisse du graphique…", "Calibrage des axes…", "Mise en couleur…"];
-const CHART_TYPE_LABELS = {
-  evolution: "Courbe d'évolution",
-  comparaison: "Comparaison",
-  classement: "Classement",
-  repartition: "Répartition",
-  difference: "Écart",
-  valeur_unique: "Valeur unique",
-};
-export default function ChatWindow({ documentIds }) {
+
+export default function ChatWindow({ documents, documentIds, conversationId, onConversationChange, onConversationsUpdated }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(null);
-  const [openAudit, setOpenAudit] = useState({});
+
+  const selectedFilenames = documents
+    .filter((d) => documentIds.includes(d.document_id))
+    .map((d) => d.filename);
+
+  useEffect(() => {
+    if (!conversationId) { setMessages([]); return; }
+    getConversation(conversationId).then((data) => {
+      const loaded = [];
+      data.messages.forEach((m) => {
+        loaded.push({ role: "question", text: m.question });
+        loaded.push({
+          role: "answer",
+          text: m.answer,
+          sources: m.sources,
+          chartUrl: m.chart_url ? `http://localhost:5000${m.chart_url}?t=${Date.now()}` : undefined,
+        });
+      });
+      setMessages(loaded);
+    });
+  }, [conversationId]);
 
   const send = async (mode) => {
-    if (!input.trim() || documentIds.length === 0 || pending) return;
+    if (!input.trim() || pending) return;
+    if (!conversationId && documentIds.length === 0) return;
+
     const question = input.trim();
     setMessages((m) => [...m, { role: "question", text: question }]);
     setInput("");
@@ -30,99 +47,92 @@ export default function ChatWindow({ documentIds }) {
 
     try {
       if (mode === "chart") {
-        const data = await generateChart(documentIds, question);
-        setMessages((m) => [
-          ...m,
-          { role: "answer", text: "Voici le graphique demandé.",  chartUrl: `http://localhost:5000${data.chart_url}?t=${Date.now()}`,chartType: data.chart_type_detected },
-        ]);
+        const data = await generateChart(documentIds, question, conversationId);
+        setMessages((m) => [...m, {
+          role: "answer",
+          text: "Voici le graphique demandé.",
+          chartUrl: `http://localhost:5000${data.chart_url}?t=${Date.now()}`,
+        }]);
+        if (!conversationId) onConversationChange(data.conversation_id);
       } else {
-        const data = await askQuestion(documentIds, question);
+        const data = await askQuestion(documentIds, question, conversationId);
         setMessages((m) => [...m, { role: "answer", text: data.answer, sources: data.sources }]);
+        if (!conversationId) onConversationChange(data.conversation_id);
       }
-    } catch (err) {
+      onConversationsUpdated?.();
+    } catch {
       setMessages((m) => [...m, { role: "answer", text: "Une erreur est survenue. Réessayez." }]);
     } finally {
       setPending(null);
     }
   };
 
-  const toggleAudit = (i) => setOpenAudit((o) => ({ ...o, [i]: !o[i] }));
+  const canSend = input.trim() && !pending && (conversationId || documentIds.length > 0);
 
   return (
-    <div className="main">
-      <div className="main-header">
-        <h2>Consultation du dossier</h2>
-        <span className="selection-hint">
-          {documentIds.length === 0
-            ? "Aucun document sélectionné"
-            : `${documentIds.length} document${documentIds.length > 1 ? "s" : ""} sélectionné${documentIds.length > 1 ? "s" : ""}`}
-        </span>
+    <div className="chat-shell">
+      <div className="chat-header">
+        <div className="chat-header-left">
+          <h2>Financial Analyst</h2>
+          <span className="ready-indicator"><span className="ready-dot" />Ready</span>
+        </div>
+        <div className="doc-pills">
+          {selectedFilenames.map((f, i) => <span className="doc-pill" key={i}>{f}</span>)}
+        </div>
       </div>
 
-      <div className="thread">
+      <div className="chat-thread">
         {messages.length === 0 && (
-          <div className="empty-state">
-            <div className="glyph">§</div>
-            <p>Sélectionnez un ou plusieurs dossiers, puis posez votre question.</p>
+          <div className="empty-state-v2">
+            <strong>Ask your financial data</strong>
+            <span>Select documents, then ask a question to start the conversation.</span>
           </div>
         )}
 
-        {messages.map((m, i) => (
-          <div className={`slip ${m.role}`} key={i}>
-            {m.role === "question" ? (
-              m.text
-            ) : (
-              <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-              </div>
-            )}
-
-             {m.chartUrl && (
-              <>
-                {m.chartType && (
-                  <span className="chart-type-badge">{CHART_TYPE_LABELS[m.chartType] || m.chartType}</span>
-                )}
-                <div className="chart-frame">
-                  <img src={m.chartUrl} alt="Graphique généré" />
-                </div>
-              </>
-            )}
-
-            {m.role === "answer" && !m.chartUrl && (
-              <>
-                <div className="stamp">✓ Vérifié sur pièce</div>
-                {m.sources && m.sources.length > 0 && (
-                  <button className="audit-toggle" onClick={() => toggleAudit(i)}>
-                    {openAudit[i] ? "Masquer les sources ▴" : `Voir les sources (${m.sources.length}) ▾`}
-                  </button>
-                )}
-                {openAudit[i] && <SourcePanel sources={m.sources} answerText={m.text} />}
-              </>
-            )}
-          </div>
-        ))}
+        {messages.map((m, i) =>
+          m.role === "question" ? (
+            <div className="msg-question" key={i}>{m.text}</div>
+          ) : (
+            <div className="msg-answer" key={i}>
+              {m.chartUrl ? (
+                <img src={m.chartUrl} alt="Généré" style={{ width: "100%", borderRadius: 8 }} />
+              ) : (
+                <>
+                  <div className="answer-block">
+                    <div className="answer-eyebrow">Answer</div>
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                  </div>
+                  <KeyFigures answerText={m.text} />
+                  <SourceChips sources={m.sources} answerText={m.text} />
+                </>
+              )}
+            </div>
+          )
+        )}
 
         {pending && (
-          <div className="slip answer">
+          <div className="msg-answer">
             <LoadingMessage messages={pending === "chart" ? CHART_MESSAGES : CHAT_MESSAGES} />
           </div>
         )}
       </div>
 
-      <div className="composer">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send("chat")}
-          placeholder="Quel est le total du bilan de…"
-          disabled={documentIds.length === 0}
-        />
-        <button className="secondary" onClick={() => send("chart")} disabled={!input.trim() || pending}>
-          Graphique
-        </button>
-        <button className="primary" onClick={() => send("chat")} disabled={!input.trim() || pending}>
-          Envoyer
-        </button>
+      <div className="chat-composer">
+        <div className="chat-composer-inner">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send("chat")}
+            placeholder="Ask a question about your financial reports…"
+            disabled={!conversationId && documentIds.length === 0}
+          />
+          <button className="btn btn-secondary" onClick={() => send("chart")} disabled={!canSend}>
+            <BarChart3 size={15} />
+          </button>
+          <button className="btn btn-primary" onClick={() => send("chat")} disabled={!canSend}>
+            <Send size={15} />
+          </button>
+        </div>
       </div>
     </div>
   );

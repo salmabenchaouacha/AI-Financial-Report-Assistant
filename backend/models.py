@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.dialects.postgresql import JSONB
 
 db = SQLAlchemy()
 
@@ -15,11 +16,6 @@ class Document(db.Model):
     path = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # Relation vers l'historique des questions posées sur ce document
-    chat_messages = db.relationship(
-        "ChatMessage", backref="document", cascade="all, delete-orphan"
-    )
-
     def to_dict(self):
         return {
             "document_id": self.id,
@@ -30,20 +26,52 @@ class Document(db.Model):
         }
 
 
+class Conversation(db.Model):
+    __tablename__ = "conversations"
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = db.Column(db.String(255), nullable=False, default="Nouvelle discussion")
+    document_ids = db.Column(JSONB, nullable=False, default=list)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    messages = db.relationship(
+        "ChatMessage", backref="conversation", cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+    def to_dict(self, include_messages=False):
+        data = {
+            "conversation_id": self.id,
+            "title": self.title,
+            "document_ids": self.document_ids,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_messages:
+            data["messages"] = [m.to_dict() for m in self.messages]
+        return data
+
+
 class ChatMessage(db.Model):
     __tablename__ = "chat_history"
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    document_id = db.Column(db.String(36), db.ForeignKey("documents.id"), nullable=False)
+    conversation_id = db.Column(db.String(36), db.ForeignKey("conversations.id"), nullable=False)
+    document_id = db.Column(db.String(36), nullable=True)  # référence indicative, pas de FK stricte
     question = db.Column(db.Text, nullable=False)
     answer = db.Column(db.Text, nullable=False)
+    sources = db.Column(JSONB, nullable=True)
+    chart_url = db.Column(db.String(500), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
         return {
             "id": self.id,
-            "document_id": self.document_id,
+            "conversation_id": self.conversation_id,
             "question": self.question,
             "answer": self.answer,
+            "sources": self.sources,
+            "chart_url": self.chart_url,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

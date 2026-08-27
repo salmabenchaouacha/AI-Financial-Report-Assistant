@@ -18,6 +18,8 @@ from  rag.vector_store import delete_document_chunks  # adapte le chemin d'impor
 from agent.reasoning import answer_question, build_context_from_chunks, build_sources_from_results
 from rag.vector_store import index_chunks, search, build_document_filter, search_with_table_priority
 from services.cloud_storage import upload_pdf_to_cloud, local_copy_of
+from datetime import datetime
+from models import db, Document, Conversation, ChatMessage
 upload_bp = Blueprint("upload", __name__)
 
 _ANALYTICAL_KEYWORDS = [
@@ -226,9 +228,28 @@ def chat_route():
     body = request.get_json()
     question = body.get("question")
     document_ids = body.get("document_ids") or body.get("document_id")
+    conversation_id = body.get("conversation_id")
+
+    if isinstance(document_ids, str):
+        document_ids = [document_ids]
+
+    conv = None
+    if conversation_id:
+        conv = Conversation.query.get(conversation_id)
+        if not conv:
+            return jsonify({"error": "conversation_id inconnu"}), 404
+        document_ids = conv.document_ids  # source de vérité une fois la discussion démarrée
 
     if not question or not document_ids:
         return jsonify({"error": "champs 'question' et 'document_id(s)' requis"}), 400
+
+    if conv is None:
+        conv = Conversation(
+            title=question[:60] + ("…" if len(question) > 60 else ""),
+            document_ids=document_ids,
+        )
+        db.session.add(conv)
+        db.session.flush()
 
     n_results = 12 if is_analytical_question(question) else 8
     search_results = search_with_table_priority(question, document_ids, n_results=n_results, n_tables=5)
@@ -236,39 +257,26 @@ def chat_route():
     answer = answer_question(question, search_results)
     sources = build_sources_from_results(search_results)
 
-    primary_document_id = document_ids if isinstance(document_ids, str) else document_ids[0]
-
-    chat_entry = ChatMessage(
-        document_id=primary_document_id,
+    message = ChatMessage(
+        conversation_id=conv.id,
+        document_id=document_ids[0],
         question=question,
         answer=answer,
+        sources=sources,
     )
-    db.session.add(chat_entry)
+    db.session.add(message)
+    conv.updated_at = datetime.utcnow()
     db.session.commit()
 
     return jsonify({
-        "document_ids": document_ids if isinstance(document_ids, list) else [document_ids],
+        "conversation_id": conv.id,
+        "conversation_title": conv.title,
+        "document_ids": document_ids,
         "question": question,
         "answer": answer,
         "sources": sources,
     })
-    
 
-@upload_bp.route("/chat-history/<document_id>", methods=["GET"])
-def get_chat_history(document_id):
-    """
-    Nouveau : récupère l'historique des questions/réponses pour un document.
-    """
-    doc = Document.query.get(document_id)
-    if not doc:
-        return jsonify({"error": "document_id inconnu"}), 404
-
-    messages = ChatMessage.query.filter_by(document_id=document_id).order_by(ChatMessage.created_at).all()
-
-    return jsonify({
-        "document_id": document_id,
-        "history": [m.to_dict() for m in messages],
-    })
 
 
 from code_generation.generator import generate_chart_code, classify_chart_intent
@@ -278,9 +286,28 @@ def chart_route():
     body = request.get_json()
     question = body.get("question")
     document_ids = body.get("document_ids") or body.get("document_id")
+    conversation_id = body.get("conversation_id")
+
+    if isinstance(document_ids, str):
+        document_ids = [document_ids]
+
+    conv = None
+    if conversation_id:
+        conv = Conversation.query.get(conversation_id)
+        if not conv:
+            return jsonify({"error": "conversation_id inconnu"}), 404
+        document_ids = conv.document_ids
 
     if not question or not document_ids:
         return jsonify({"error": "champs 'question' et 'document_id(s)' requis"}), 400
+
+    if conv is None:
+        conv = Conversation(
+            title=question[:60] + ("…" if len(question) > 60 else ""),
+            document_ids=document_ids,
+        )
+        db.session.add(conv)
+        db.session.flush()
 
     filters = build_document_filter(document_ids)
     search_results = search(question, filters=filters, n_results=8)
@@ -288,7 +315,6 @@ def chart_route():
 
     chart_intent = classify_chart_intent(question)
     code = generate_chart_code(question, context, chart_intent=chart_intent)
-
     result = run_chart_code(code)
 
     if not result["success"]:
@@ -297,32 +323,53 @@ def chart_route():
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
     results_folder.mkdir(parents=True, exist_ok=True)
 
-    primary_document_id = document_ids if isinstance(document_ids, str) else document_ids[0]
-    chart_path = results_folder / f"{primary_document_id}_chart.png"
+    primary_document_id = document_ids[0]
+
+    # UUID unique pour chaque graphique généré
+    chart_id = str(uuid.uuid4())
+
+    chart_path = results_folder / f"{chart_id}.png"
+
     with open(chart_path, "wb") as f:
         f.write(result["chart_bytes"])
 
+    chart_url = f"/api/upload/chart-image/{chart_id}"
+    message = ChatMessage(
+        conversation_id=conv.id,
+        document_id=primary_document_id,
+        question=question,
+        answer="Graphique généré.",
+        chart_url=chart_url,
+    )
+    db.session.add(message)
+    conv.updated_at = datetime.utcnow()
+    db.session.commit()
+
     return jsonify({
-        "document_ids": document_ids if isinstance(document_ids, list) else [document_ids],
+        "conversation_id": conv.id,
+        "conversation_title": conv.title,
+        "document_ids": document_ids,
         "question": question,
         "chart_type_detected": chart_intent,
-        "chart_url": f"/api/upload/chart-image/{primary_document_id}",
+        "chart_url": chart_url,
         "attempts": result["attempts"],
     })
- 
 
-@upload_bp.route("/chart-image/<document_id>", methods=["GET"])
-def get_chart_image(document_id):
+
+@upload_bp.route("/chart-image/<chart_id>", methods=["GET"])
+def get_chart_image(chart_id):
     results_folder = Path(current_app.config["RESULTS_FOLDER"])
-    chart_path = results_folder / f"{document_id}_chart.png"
+    chart_path = results_folder / f"{chart_id}.png"
 
     if not chart_path.exists():
-        return jsonify({"error": "Aucun graphique généré pour ce document_id"}), 404
+        return jsonify({"error": "Graphique introuvable"}), 404
 
     response = send_file(chart_path, mimetype="image/png")
+
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
+
     return response
 @upload_bp.route("/documents", methods=["GET"])
 def list_documents():
@@ -354,3 +401,50 @@ def delete_document(document_id):
         "document_id": document_id,
         "chunks_supprimes": deleted_chunks
     }), 200
+    
+@upload_bp.route("/conversations", methods=["GET"])
+def list_conversations():
+    convs = Conversation.query.order_by(Conversation.updated_at.desc()).all()
+    return jsonify({"conversations": [c.to_dict() for c in convs]})
+
+
+@upload_bp.route("/conversations/<conversation_id>", methods=["GET"])
+def get_conversation(conversation_id):
+    conv = Conversation.query.get(conversation_id)
+    if not conv:
+        return jsonify({"error": "conversation_id inconnu"}), 404
+    return jsonify(conv.to_dict(include_messages=True))
+
+
+@upload_bp.route("/conversations/<conversation_id>", methods=["DELETE"])
+def delete_conversation(conversation_id):
+    conv = Conversation.query.get(conversation_id)
+    if not conv:
+        return jsonify({"error": "conversation_id inconnu"}), 404
+    db.session.delete(conv)
+    db.session.commit()
+    return jsonify({"status": "deleted"})
+
+@upload_bp.route("/stats", methods=["GET"])
+def get_stats():
+    return jsonify({
+        "documents": Document.query.count(),
+        "indexed_documents": Document.query.filter_by(status="indexed").count(),
+        "analyses": Conversation.query.count(),
+        "charts": ChatMessage.query.filter(ChatMessage.chart_url.isnot(None)).count(),
+    })
+    
+@upload_bp.route("/reports", methods=["GET"])
+def list_reports():
+    messages = ChatMessage.query.filter(ChatMessage.chart_url.isnot(None)).order_by(ChatMessage.created_at.desc()).all()
+    results = []
+    for m in messages:
+        doc = Document.query.get(m.document_id)
+        results.append({
+            "id": m.id,
+            "question": m.question,
+            "chart_url": m.chart_url,
+            "filename": doc.filename if doc else None,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        })
+    return jsonify({"reports": results})
