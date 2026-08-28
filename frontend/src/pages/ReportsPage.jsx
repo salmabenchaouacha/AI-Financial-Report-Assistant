@@ -1,18 +1,24 @@
 import { useEffect, useState } from "react";
-import { Download, Maximize2, BarChart3 } from "lucide-react";
-import { listReports } from "../api/client";
+import { Download, Maximize2, BarChart3, Trash2 } from "lucide-react";
+import { listReports, removeFromReport } from "../api/client";
 
 export default function ReportsPage() {
   const [reports, setReports] = useState([]);
 
-  useEffect(() => { listReports().then((d) => setReports(d.reports)); }, []);
+  const refresh = () => listReports().then((d) => setReports(d.reports));
+  useEffect(() => { refresh(); }, []);
+
+  const handleRemove = async (id) => {
+    await removeFromReport(id);
+    refresh();
+  };
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1>Financial Visualization</h1>
-          <p>All charts generated from your reports, in one place.</p>
+          <p>Charts you've chosen to keep in your report.</p>
         </div>
       </div>
 
@@ -20,8 +26,8 @@ export default function ReportsPage() {
         <div className="section">
           <div className="empty-state-v2">
             <div className="icon-wrap"><BarChart3 size={20} /></div>
-            <strong>No charts yet</strong>
-            <span>Generate a chart from the Analysis page to see it here.</span>
+            <strong>No charts in your report</strong>
+            <span>Add a chart from the Chat page using "Add to report".</span>
           </div>
         </div>
       ) : (
@@ -43,6 +49,9 @@ export default function ReportsPage() {
                     <a className="icon-btn" href={`http://localhost:5000${r.chart_url}`} download>
                       <Download size={13} />
                     </a>
+                    <button className="report-card-remove" onClick={() => handleRemove(r.id)}>
+                      <Trash2 size={13} />
+                    </button>
                   </div>
                 </div>
               </div>

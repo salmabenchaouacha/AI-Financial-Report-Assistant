@@ -352,6 +352,7 @@ def chart_route():
         "question": question,
         "chart_type_detected": chart_intent,
         "chart_url": chart_url,
+        "message_id": message.id,
         "attempts": result["attempts"],
     })
 
@@ -436,7 +437,7 @@ def get_stats():
     
 @upload_bp.route("/reports", methods=["GET"])
 def list_reports():
-    messages = ChatMessage.query.filter(ChatMessage.chart_url.isnot(None)).order_by(ChatMessage.created_at.desc()).all()
+    messages = ChatMessage.query.filter_by(saved_to_report=True).order_by(ChatMessage.created_at.desc()).all()
     results = []
     for m in messages:
         doc = Document.query.get(m.document_id)
@@ -448,3 +449,92 @@ def list_reports():
             "created_at": m.created_at.isoformat() if m.created_at else None,
         })
     return jsonify({"reports": results})
+
+
+@upload_bp.route("/reports/<int:message_id>/save", methods=["POST"])
+def save_to_report(message_id):
+    message = ChatMessage.query.get(message_id)
+    if not message or not message.chart_url:
+        return jsonify({"error": "Message introuvable ou sans graphique"}), 404
+    message.saved_to_report = True
+    db.session.commit()
+    return jsonify({"status": "saved"})
+
+
+@upload_bp.route("/reports/<int:message_id>/save", methods=["DELETE"])
+def remove_from_report(message_id):
+    message = ChatMessage.query.get(message_id)
+    if not message:
+        return jsonify({"error": "Message introuvable"}), 404
+    message.saved_to_report = False
+    db.session.commit()
+    return jsonify({"status": "removed"})
+
+@upload_bp.route("/chat-with-upload", methods=["POST"])
+def chat_with_upload():
+    if "file" not in request.files:
+        return jsonify({"error": "Aucun fichier fourni"}), 400
+
+    file = request.files["file"]
+    question = request.form.get("question")
+    conversation_id = request.form.get("conversation_id") or None
+
+    if not question or file.filename == "":
+        return jsonify({"error": "Fichier et question requis"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Seuls les fichiers PDF sont acceptés"}), 400
+
+    document_id = str(uuid.uuid4())
+    filename = secure_filename(file.filename)
+
+    tmp_dir = Path(current_app.config["UPLOAD_FOLDER"])
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"{document_id}.pdf"
+    file.save(tmp_path)
+
+    cloud_url = upload_pdf_to_cloud(str(tmp_path), public_id=document_id)
+    os.remove(tmp_path)
+
+    doc = Document(id=document_id, filename=filename, status="uploaded", path=cloud_url)
+    db.session.add(doc)
+    db.session.commit()
+
+    with local_copy_of(doc) as local_path:
+        pages = extract_text_by_page(local_path)
+        tables = extract_tables(local_path)
+        images = extract_and_describe_images(local_path)
+
+    chunks = []
+    chunks += chunk_text_pages(pages, document_id, filename=doc.filename)
+    chunks += chunk_tables(tables, document_id, filename=doc.filename)
+    chunks += chunk_images(images, document_id, filename=doc.filename)
+    index_chunks(chunks)
+
+    doc.status = "indexed"
+    db.session.commit()
+
+    document_ids = [document_id]
+    n_results = 12 if is_analytical_question(question) else 8
+    search_results = search_with_table_priority(question, document_ids, n_results=n_results, n_tables=5)
+    answer = answer_question(question, search_results)
+    sources = build_sources_from_results(search_results)
+
+    conv = Conversation.query.get(conversation_id) if conversation_id else None
+    if conv is None:
+        conv = Conversation(title=question[:60], document_ids=document_ids)
+        db.session.add(conv)
+        db.session.flush()
+
+    message = ChatMessage(conversation_id=conv.id, document_id=document_id, question=question, answer=answer, sources=sources)
+    db.session.add(message)
+    conv.updated_at = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({
+        "conversation_id": conv.id,
+        "document": doc.to_dict(),
+        "question": question,
+        "answer": answer,
+        "sources": sources,
+    })

@@ -75,19 +75,46 @@ CATÉGORIE :"""
 
     return "comparaison"  # valeur par défaut sûre
 
+import re
 
-def generate_chart_code(question: str, context: str, chart_intent: str = None) -> str:
+def extract_numbers_from_text(text: str) -> set:
+    """Extrait les nombres significatifs d'un texte, normalisés pour comparaison."""
+    matches = re.findall(r'\d+(?:[.,]\d+)?', text)
+    cleaned = set()
+    for m in matches:
+        normalized = m.replace(",", ".")
+        digits_only = normalized.replace(".", "")
+        if len(digits_only) >= 2:
+            cleaned.add(normalized.rstrip("0").rstrip(".") if "." in normalized else normalized)
+    return cleaned
+
+
+def validate_chart_code_against_context(code: str, context: str) -> bool:
     """
-    Demande au LLM de générer du code Python (matplotlib) pour créer
-    un graphique à partir des données présentes dans le contexte,
-    avec un type de graphique imposé selon l'intention détectée.
+    Vérifie qu'une part significative des nombres codés en dur dans le
+    graphique généré apparaît bien dans le contexte source, pour bloquer
+    les hallucinations de valeurs plausibles mais inventées.
     """
+    code_numbers = extract_numbers_from_text(code)
+    context_numbers = extract_numbers_from_text(context)
+
+    # Ignore les petits nombres génériques (tailles de figure, index, DPI...)
+    code_numbers = {n for n in code_numbers if len(n.replace(".", "")) >= 2}
+
+    if not code_numbers:
+        return True
+
+    matches = sum(1 for n in code_numbers if any(n in cn or cn in n for cn in context_numbers))
+    ratio = matches / len(code_numbers)
+    return ratio >= 0.3
+
+def generate_chart_code(question: str, context: str, chart_intent: str = None, max_retries: int = 2) -> str:
     if chart_intent is None:
         chart_intent = classify_chart_intent(question)
 
     guidance = CHART_TYPE_GUIDANCE.get(chart_intent, CHART_TYPE_GUIDANCE["comparaison"])
 
-    prompt = f"""Tu es un générateur de code Python spécialisé en visualisation de données financières.
+    base_prompt = f"""Tu es un générateur de code Python spécialisé en visualisation de données financières.
 
 À partir du CONTEXTE ci-dessous (extrait d'un rapport financier), écris un script Python
 qui génère un graphique répondant à la QUESTION.
@@ -96,7 +123,9 @@ qui génère un graphique répondant à la QUESTION.
 
 RÈGLES STRICTES :
 - Utilise UNIQUEMENT matplotlib (pas plotly)
-- Utilise UNIQUEMENT les chiffres présents dans le contexte, n'invente aucune donnée
+- Utilise UNIQUEMENT les chiffres présents MOT POUR MOT dans le contexte, n'invente JAMAIS de valeur
+- Si un chiffre nécessaire n'apparaît pas explicitement dans le contexte, affiche à la place un
+  message clair "Donnée absente du contexte" plutôt que d'estimer ou d'inventer une valeur
 - Le script doit sauvegarder le graphique avec : plt.savefig('chart.png')
 - Ajoute un titre clair et des labels d'axes lisibles
 - Réponds UNIQUEMENT avec le code Python, sans explication, sans balises markdown
@@ -109,9 +138,16 @@ QUESTION : {question}
 CODE PYTHON :"""
 
     model = genai.GenerativeModel("gemini-flash-lite-latest")
-    response = model.generate_content(prompt)
+    prompt = base_prompt
+    code = ""
 
-    code = response.text.strip()
-    code = code.replace("```python", "").replace("```", "").strip()
+    for attempt in range(max_retries + 1):
+        response = model.generate_content(prompt)
+        code = response.text.strip().replace("```python", "").replace("```", "").strip()
+
+        if validate_chart_code_against_context(code, context):
+            return code
+
+        prompt = base_prompt + "\n\nATTENTION : ta réponse précédente contenait des chiffres absents du CONTEXTE fourni. Relis attentivement le CONTEXTE et n'utilise QUE des valeurs qui y apparaissent littéralement."
 
     return code

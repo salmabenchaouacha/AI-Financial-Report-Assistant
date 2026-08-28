@@ -757,3 +757,84 @@ body {
 .upload-step.active { background: var(--processing-soft); color: var(--processing); font-weight: 600; }
 .upload-step.done { background: var(--positive-soft); color: var(--positive); font-weight: 600; }
 .upload-step.failed { background: var(--negative-soft); color: var(--negative); font-weight: 600; }
+
+/* Chat layout avec historique */
+.chat-page-layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+}
+
+.conv-sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.conv-sidebar-list { display: flex; flex-direction: column; gap: 4px; }
+
+.conv-item {
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.conv-item:hover { background: var(--surface-muted); }
+.conv-item.active { background: var(--accent-soft); }
+.conv-item-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-item-date { font-size: 10.5px; color: var(--ink-tertiary); margin-top: 2px; }
+
+/* Attachment inline dans le composer */
+.attach-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 0 12px;
+  cursor: pointer;
+  color: var(--ink-secondary);
+  display: flex;
+  align-items: center;
+}
+.attach-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.attached-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  width: fit-content;
+}
+
+.attached-file-chip button {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  display: flex;
+}
+
+/* Bouton ajouter au rapport, sur un chart dans le chat */
+.chart-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+/* Reports page — bouton supprimer sur les cards */
+.report-card-remove {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  cursor: pointer;
+  color: var(--negative);
+}
+.report-card-remove:hover { border-color: var(--negative); background: var(--negative-soft); }

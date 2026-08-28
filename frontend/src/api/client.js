@@ -70,3 +70,26 @@ export const listReports = async () => {
   const res = await axios.get(`${API_BASE}/upload/reports`);
   return res.data;
 };
+
+
+export const saveToReport = async (messageId) => {
+  const res = await axios.post(`${API_BASE}/upload/reports/${messageId}/save`);
+  return res.data;
+};
+
+export const removeFromReport = async (messageId) => {
+  const res = await axios.delete(`${API_BASE}/upload/reports/${messageId}/save`);
+  return res.data;
+};
+
+export const chatWithUpload = async (file, question, conversationId) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("question", question);
+  if (conversationId) formData.append("conversation_id", conversationId);
+
+  const res = await axios.post(`${API_BASE}/upload/chat-with-upload`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data;
+};

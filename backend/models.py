@@ -63,6 +63,7 @@ class ChatMessage(db.Model):
     answer = db.Column(db.Text, nullable=False)
     sources = db.Column(JSONB, nullable=True)
     chart_url = db.Column(db.String(500), nullable=True)
+    saved_to_report = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -73,5 +74,6 @@ class ChatMessage(db.Model):
             "answer": self.answer,
             "sources": self.sources,
             "chart_url": self.chart_url,
+            "saved_to_report": self.saved_to_report,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
